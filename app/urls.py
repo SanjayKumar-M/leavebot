@@ -1,7 +1,7 @@
 from django.urls import path
-from .views import slack_events, handle_leave_approval
+from . import views
 
 urlpatterns = [
-    path('slack/events/', slack_events, name='slack_events'),
-    path('slack/approve/', handle_leave_approval, name='handle_leave_approval'),
+    path('slack/events/', views.slack_events, name='slack_events'),
+    path('slack/interactive/', views.slack_interactive, name='slack_interactive'),
 ]

@@ -1,5 +1,4 @@
 from django.contrib import admin
-from .models import LeaveRequest, Role
+from .models import LeaveApplication
 
-admin.site.register(LeaveRequest)
-admin.site.register(Role)
+admin.site.register(LeaveApplication)
