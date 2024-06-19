@@ -86,47 +86,87 @@ def slack_slash_command(request):
                 return JsonResponse({"response_type": "ephemeral", "text": response_text})
             elif data.get('command') == '/history':
                 user_id = data.get('user_id')
-                send_leave_history(user_id)
-                return JsonResponse({"response_type": "ephemeral", "text": "Leave history sent to your DM"})
+                text = data.get('text', '').strip()
+                if text == 'download':
+                    send_leave_history(user_id, download=True)
+                    return JsonResponse({"response_type": "ephemeral", "text": "Leave history image sent to your DM"})
+                else:
+                    send_leave_history(user_id)
+                    return JsonResponse({"response_type": "ephemeral", "text": "Leave history sent to your DM"})
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
     return JsonResponse({"success": False}, status=400)
-    
 
-def send_leave_history(slack_user_id):
+import io
+import base64
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  
+import matplotlib.pyplot as plt
+
+def send_leave_history(slack_user_id, download=False):
     try:
         applications = LeaveApplication.objects.filter(slack_user_id=slack_user_id).order_by('-submitted_at')
 
         if applications.exists():
-            table = PrettyTable()
-            table.field_names = ["NAME", "ID", "TYPE", "REASON", "DATE", "STATUS"]
-
+            data = []
             for app in applications:
-                status_color = 'green' if app.status == 'approved ' else 'red'
-                status_text = f"[color={status_color}]{app.status}[/color]"
-                table.add_row([
-                    app.employee_name,
-                    app.employee_id,
-                    app.leave_type,
-                    app.reason,
-                    f"{app.start_date} to {app.end_date}",
-                    app.status
-                ])
+                status_color = 'green' if app.status == 'approved' else 'red'
+                data.append({
+                    'NAME': app.employee_name,
+                    'ID': app.employee_id,
+                    'TYPE': app.leave_type,
+                    'REASON': app.reason,
+                    'DATE': f"{app.start_date} to {app.end_date}",
+                    'STATUS': f"{app.status}"
+                })
 
-            table_string = f"```{table.get_string()}```"
+            df = pd.DataFrame(data)
 
-            try:
-                response = slack_client.conversations_open(users=slack_user_id)
-                dm_channel = response['channel']['id']
+            if download:
+               
+                fig, ax = plt.subplots(figsize=(12, 16))
+                ax.axis('off')
+                ax.table(cellText=df.values, colLabels=df.columns, loc='center',cellLoc='center')
 
-                slack_client.chat_postMessage(
-                    channel=dm_channel,
-                    text=f"Here is your leave history:\n{table_string}"
-                )
-            except SlackApiError as e:
-                logger.error(f"Slack API error (conversations_open): {e.response['error']}")
-                return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
+                
+                buf = io.BytesIO()
+                plt.savefig(buf, format='pdf', bbox_inches='tight')
+                buf.seek(0)
+
+                try:
+                    response = slack_client.conversations_open(users=slack_user_id)
+                    dm_channel = response['channel']['id']
+
+                    slack_client.files_upload_v2(
+                        channels=dm_channel,
+                        initial_comment="Here is your leave history as an image:",
+                        file=buf.getvalue(),
+                        filename="leave_history.pdf"
+                    )
+                except SlackApiError as e:
+                    logger.error(f"Slack API error (conversations_open): {e.response['error']}")
+                    return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
+            else:
+                table = PrettyTable()
+                table.field_names = df.columns.tolist()
+                for row in df.values:
+                    table.add_row(row)
+
+                table_string = f"```\n{table}\n```"
+                
+                try:
+                    response = slack_client.conversations_open(users=slack_user_id)
+                    dm_channel = response['channel']['id']
+
+                    slack_client.chat_postMessage(
+                        channel=dm_channel,
+                        text=f"Here is your leave history:\n{table_string}"
+                    )
+                except SlackApiError as e:
+                    logger.error(f"Slack API error (conversations_open): {e.response['error']}")
+                    return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
         else:
             try:
                 response = slack_client.conversations_open(users=slack_user_id)
@@ -141,7 +181,6 @@ def send_leave_history(slack_user_id):
                 return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
     except Exception as e:
         logger.error(f"Error fetching leave history: {e}")
-
 #this code is working perfectly but the only problem is mobile responsiveness, for mobile the table is being scattered, fix this please
 
 from datetime import timedelta
@@ -430,3 +469,6 @@ def open_modal(trigger_id):
         slack_client.views_open(trigger_id=trigger_id, view=view)
     except SlackApiError as e:
         logger.error(f"Error opening modal: {e.response['error']}")
+
+
+
