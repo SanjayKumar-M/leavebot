@@ -3,5 +3,5 @@ from . import views
 
 urlpatterns = [
     path('slack/events/', views.slack_events, name='slack_events'),
-    path('slack/interactive/', views.slack_interactive, name='slack_interactive'),
-]
+    path('slack/slash_command/', views.slack_slash_command, name='slack_slash_command'),
+    path('slack/interactions/', views.handle_interactions, name='handle_interactions'),  
