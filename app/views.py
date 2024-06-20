@@ -12,19 +12,27 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk.signature import SignatureVerifier
 from .models import LeaveApplication
 import prettytable
-from slack_sdk.errors import SlackApiError
 from prettytable import PrettyTable
+import io
+import base64
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-
+# Initialize logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load Slack credentials from environment variables
+slack_bot_token = ''  # Replace with os.getenv('SLACK_BOT_TOKEN')
+slack_signing_secret = ''  # Replace with os.getenv('SLACK_SIGNING_SECRET')
 
-slack_bot_token = ''
-slack_signing_secret = ''
+# SSL context for Slack client
 ssl_context = ssl.SSLContext()
 ssl_context.verify_mode = ssl.CERT_NONE
 
+# Initialize Slack client and verifier
 slack_client = WebClient(token=slack_bot_token, ssl=ssl_context)
 verifier = SignatureVerifier(signing_secret=slack_signing_secret)
 
@@ -98,92 +106,36 @@ def slack_slash_command(request):
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
     return JsonResponse({"success": False}, status=400)
 
-import io
-import base64
-import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  
-import matplotlib.pyplot as plt
-
-def send_leave_history(slack_user_id, download=False):
+def send_leave_history(slack_user_id):
     try:
         applications = LeaveApplication.objects.filter(slack_user_id=slack_user_id).order_by('-submitted_at')
-
         if applications.exists():
             data = []
             for app in applications:
-                status_color = 'green' if app.status == 'approved' else 'red'
-                data.append({
-                    'NAME': app.employee_name,
-                    'ID': app.employee_id,
-                    'TYPE': app.leave_type,
-                    'REASON': app.reason,
-                    'DATE': f"{app.start_date} to {app.end_date}",
-                    'STATUS': f"{app.status}"
-                })
+                data.append([
+                    app.leave_type,
+                    app.reason,
+                    f"{app.start_date} to {app.end_date}",
+                    app.status
+                ])
 
-            df = pd.DataFrame(data)
+            table = PrettyTable()
+            table.field_names = ["TYPE", "REASON", "DATE", "STATUS"]
+            for row in data:
+                table.add_row(row)
 
-            if download:
-               
-                fig, ax = plt.subplots(figsize=(12, 16))
-                ax.axis('off')
-                ax.table(cellText=df.values, colLabels=df.columns, loc='center',cellLoc='center')
-
-                
-                buf = io.BytesIO()
-                plt.savefig(buf, format='pdf', bbox_inches='tight')
-                buf.seek(0)
-
-                try:
-                    response = slack_client.conversations_open(users=slack_user_id)
-                    dm_channel = response['channel']['id']
-
-                    slack_client.files_upload_v2(
-                        channels=dm_channel,
-                        initial_comment="Here is your leave history as an image:",
-                        file=buf.getvalue(),
-                        filename="leave_history.pdf"
-                    )
-                except SlackApiError as e:
-                    logger.error(f"Slack API error (conversations_open): {e.response['error']}")
-                    return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
-            else:
-                table = PrettyTable()
-                table.field_names = df.columns.tolist()
-                for row in df.values:
-                    table.add_row(row)
-
-                table_string = f"```\n{table}\n```"
-                
-                try:
-                    response = slack_client.conversations_open(users=slack_user_id)
-                    dm_channel = response['channel']['id']
-
-                    slack_client.chat_postMessage(
-                        channel=dm_channel,
-                        text=f"Here is your leave history:\n{table_string}"
-                    )
-                except SlackApiError as e:
-                    logger.error(f"Slack API error (conversations_open): {e.response['error']}")
-                    return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
+            table_string = f"```\n{table}\n```"
+            slack_client.chat_postMessage(
+                channel=slack_user_id,
+                text=f"Here is your leave history:\n{table_string}"
+            )
         else:
-            try:
-                response = slack_client.conversations_open(users=slack_user_id)
-                dm_channel = response['channel']['id']
-
-                slack_client.chat_postMessage(
-                    channel=dm_channel,
-                    text="No leave history found."
-                )
-            except SlackApiError as e:
-                logger.error(f"Slack API error (conversations_open): {e.response['error']}")
-                return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
+            slack_client.chat_postMessage(
+                channel=slack_user_id,
+                text="No leave history found."
+            )
     except Exception as e:
         logger.error(f"Error fetching leave history: {e}")
-#this code is working perfectly but the only problem is mobile responsiveness, for mobile the table is being scattered, fix this please
-
-from datetime import timedelta
 
 def calculate_leave_balance(user_id):
     try:
@@ -241,135 +193,102 @@ def handle_interactions(request):
                 return handle_interaction_action(payload)
             else:
                 return JsonResponse({'error': 'Unknown interaction type'}, status=400)
+
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
     return JsonResponse({"success": False}, status=400)
 
-def handle_submission(payload):
-    try:
-        state_values = payload['view']['state']['values']
-        employee_name = state_values['employee_name']['employee_name']['value']
-        employee_id = state_values['employee_id']['employee_id']['value']
-        employment_type = state_values['employment_type']['employment_type']['selected_option']['value']
-        leave_type = state_values['leave_type']['leave_type']['selected_option']['value']
-        reason = state_values['reason']['reason']['value']
-        start_date = state_values['start_date']['start_date']['selected_date']
-        end_date = state_values['end_date']['end_date']['selected_date']
+def handle_interaction_action(payload):
+    actions = payload['actions']
+    action = actions[0]
+    action_id = action['action_id']
+    leave_application_id = int(action['value'])
+    response_url = payload['response_url']
 
-        slack_user_id = payload['user']['id']  
+    try:
+        leave_application = LeaveApplication.objects.get(id=leave_application_id)
+        if action_id == 'approve_leave':
+            leave_application.status = 'approved'
+            status_message = f"You approved {leave_application.employee_name}'s application."
+        elif action_id == 'reject_leave':
+            leave_application.status = 'rejected'
+            status_message = f"You rejected {leave_application.employee_name}'s application."
+
+        leave_application.save()
+
+        slack_client.chat_postMessage(
+            channel=leave_application.slack_user_id,
+            text=f"Your leave application from {leave_application.start_date} to {leave_application.end_date} has been {leave_application.status}."
+        )
+
+        # Update the original message with the status
+        slack_client.chat_update(
+            channel=payload['channel']['id'],
+            ts=payload['message']['ts'],
+            text=status_message,
+            blocks=[]
+        )
+
+        return JsonResponse({"status": "ok"})
+    except LeaveApplication.DoesNotExist:
+        logger.error(f"Leave application with ID {leave_application_id} does not exist")
+        return JsonResponse({"status": "error", "message": "Leave application not found"}, status=404)
+    except Exception as e:
+        logger.error(f"Error handling leave application action: {e}")
+        return JsonResponse({"status": "error", "message": "An error occurred"}, status=500)
+
+def handle_submission(payload):
+    user_id = payload['user']['id']
+    submission = payload['view']['state']['values']
+    reason = submission['reason_block']['reason']['value']
+    leave_type = submission['leave_type_block']['leave_type']['selected_option']['value']
+    start_date = submission['start_date_block']['start_date']['selected_date']
+    end_date = submission['end_date_block']['end_date']['selected_date']
+
+    try:
+        user_info = get_slack_user_info(user_id)
+        real_name = user_info.get('real_name', 'Unknown User')
+        email = user_info.get('profile', {}).get('email', 'unknown@example.com')
+
+        # Check if the user has reached the leave limit for the month
+        if not can_apply_leave(user_id, leave_type, start_date, end_date):
+            return JsonResponse({"response_action": "errors", "errors": {"reason_block": "You have reached the leave limit for this month."}})
+
         leave_application = LeaveApplication(
-            employee_name=employee_name,
-            employee_id=employee_id,
-            slack_user_id=slack_user_id, 
-            employment_type=employment_type,
+            slack_user_id=user_id,
+            employee_name=real_name,
+            employee_email=email,
             leave_type=leave_type,
-            reason=reason,
             start_date=start_date,
             end_date=end_date,
-            submitted_at=timezone.now()
+            reason=reason,
+            status='pending',
+            submitted_at=datetime.now()
         )
         leave_application.save()
 
-        notify_employee_and_manager(slack_user_id, employee_name, employee_id, employment_type, leave_type, reason, start_date, end_date)
-
-        response = {
-            "response_action": "clear"
-        }
-        return JsonResponse(response)
-
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.error(f"Error processing submission: {e}")
-        return JsonResponse({'error': 'Invalid JSON or missing data'}, status=400)
-
-def handle_interaction_action(payload):
-    try:
-        action = payload['actions'][0]
-        action_value = action['value']
-        action_type, employee_id = action_value.split('_')
-
-        application = LeaveApplication.objects.filter(employee_id=employee_id).first()
-
-        if not application:
-            error_message = f"No leave application found for employee ID {employee_id}"
-            logger.error(error_message)
-            return JsonResponse({'error': error_message}, status=404)
-
-        action_ts = timezone.now()
-
-        if action_type == 'approve':
-            application.status = 'approved'
-            result_text = "approved"
-        else:
-            application.status = 'rejected'
-            result_text = "rejected"
-
-        application.save()
-
-        try:
-            slack_user_id = payload['user']['id']
-            response = slack_client.conversations_open(users=slack_user_id)
-            dm_channel = response['channel']['id']
-        except SlackApiError as e:
-            logger.error(f"Slack API error (conversations_open): {e.response['error']}")
-            return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
-
+        manager_id = 'U076MHB604A'  # replace with the actual manager's Slack ID
         slack_client.chat_postMessage(
-            channel=dm_channel,
-            text=f"Your leave application has been {result_text} at {action_ts}."
-        )
-
-        slack_client.chat_update(
-            channel=payload['channel']['id'],
-                        ts=payload['message']['ts'],
-            text=f"You have {result_text} {application.employee_name}'s leave application."
-        )
-        response_message = {
-            "replace_original": True,
-            "text": f"You have {result_text} {application.employee_name}'s leave application."
-        }
-
-        return JsonResponse(response_message, status=200)
-
-    except LeaveApplication.DoesNotExist:
-        logger.error(f"No leave application found for employee ID {employee_id}")
-        return JsonResponse({'error': 'Leave application not found'}, status=404)
-    except SlackApiError as e:
-        logger.error(f"Slack API error: {e.response['error']}")
-        return JsonResponse({'error': 'Slack API error', 'details': e.response['error']}, status=500)
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)
-
-def notify_employee_and_manager(slack_user_id, employee_name, employee_id, employment_type, leave_type, reason, start_date, end_date):
-    try:
-        slack_client.chat_postMessage(
-            channel='#leaves',
-            text=f"Thanks {employee_name}, your leave application has been sent to the manager."
-        )
-        manager_user_id = 'U076MHB604A'
-        message = {
-            "channel": manager_user_id,
-            "blocks": [
+            channel=manager_id,
+            text=f"New leave application submitted by {real_name}:\n"
+                 f"Type: {leave_type}\n"
+                 f"Reason: {reason}\n"
+                 f"From: {start_date} To: {end_date}",
+            blocks=[
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": (
-                            f"Leave Application Details:\n"
-                            f"*Employee Name:* {employee_name}\n"
-                            f"*Employee ID:* {employee_id}\n"
-                            f"*Employment Type:* {employment_type}\n"
-                            f"*Leave Type:* {leave_type}\n"
-                            f"*Reason:* {reason}\n"
-                            f"*Start Date:* {start_date}\n"
-                            f"*End Date:* {end_date}\n"
-                            "Please approve or reject the leave application."
-                        )
+                        "text": f"*New leave application submitted by {real_name}:*\n"
+                                f"*Type:* {leave_type}\n"
+                                f"*Reason:* {reason}\n"
+                                f"*From:* {start_date} To: {end_date}"
                     }
                 },
                 {
                     "type": "actions",
+                    "block_id": f"leave_{leave_application.id}",
                     "elements": [
                         {
                             "type": "button",
@@ -378,7 +297,8 @@ def notify_employee_and_manager(slack_user_id, employee_name, employee_id, emplo
                                 "text": "Approve"
                             },
                             "style": "primary",
-                            "value": f"approve_{employee_id}"
+                            "action_id": "approve_leave",
+                            "value": str(leave_application.id)
                         },
                         {
                             "type": "button",
@@ -387,88 +307,110 @@ def notify_employee_and_manager(slack_user_id, employee_name, employee_id, emplo
                                 "text": "Reject"
                             },
                             "style": "danger",
-                            "value": f"reject_{employee_id}"
+                            "action_id": "reject_leave",
+                            "value": str(leave_application.id)
                         }
                     ]
                 }
             ]
-        }
+        )
 
-        slack_client.chat_postMessage(**message)
-    except SlackApiError as e:
-        logger.error(f"Error sending notifications: {e.response['error']}")
+        slack_client.chat_postMessage(
+            channel=user_id,
+            text=f"Your leave application has been submitted:\n\n"
+                 f"Type: {leave_type}\n"
+                 f"Reason: {reason}\n"
+                 f"From: {start_date} To: {end_date}\n\n"
+                 f"You will be notified once it is reviewed."
+        )
+
+        return JsonResponse({"response_action": "clear"})
+    except Exception as e:
+        logger.error(f"Error saving leave application: {e}")
+        return JsonResponse({"response_action": "errors", "errors": {"reason_block": "Failed to save application. Please try again."}})
+
+def can_apply_leave(user_id, leave_type, start_date, end_date):
+    current_year = timezone.now().year
+    current_month = timezone.now().month
+
+    # Define leave limits
+    monthly_limit = 2
+
+    # Calculate days used for the given leave type in the current month
+    applications = LeaveApplication.objects.filter(
+        slack_user_id=user_id,
+        status='approved',
+        leave_type=leave_type,
+        start_date__year=current_year,
+        start_date__month=current_month
+    )
+
+    days_used_this_month = sum((app.end_date - app.start_date).days + 1 for app in applications)
+
+    # Calculate the number of days for the new leave application
+    new_leave_days = (datetime.strptime(end_date, "%Y-%m-%d") - datetime.strptime(start_date, "%Y-%m-%d")).days + 1
+
+    if leave_type in ['sick', 'casual']:
+        if days_used_this_month + new_leave_days > monthly_limit:
+            slack_client.chat_postMessage(
+                channel=user_id,
+                text=f"You have reached the limit of {monthly_limit} {leave_type} leave days for this month."
+            )
+            return False
+    return True
 
 def open_modal(trigger_id):
-    try:
-        view = {
-            "type": "modal",
-            "callback_id": "handle_submission",
-            "title": {"type": "plain_text", "text": "Leave Application"},
-            "submit": {"type": "plain_text", "text": "Submit"},
-            "blocks": [
-                {
-                    "type": "input",
-                    "block_id": "employee_name",
-                    "element": {"type": "plain_text_input", "action_id": "employee_name"},
-                    "label": {"type": "plain_text", "text": "Employee Name"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "employee_id",
-                    "element": {"type": "plain_text_input", "action_id": "employee_id"},
-                    "label": {"type": "plain_text", "text": "Employee ID"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "employment_type",
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "employment_type",
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "Full-Time"}, "value": "full_time"},
-                            {"text": {"type": "plain_text", "text": "Intern"}, "value": "part_time"}
-                        ]
-                    },
-                    "label": {"type": "plain_text", "text": "Employment Type"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "leave_type",
-                    "element": {
-                        "type": "static_select",
-                        "action_id": "leave_type",
-                        "options": [
-                            {"text": {"type": "plain_text", "text": "Casual"}, "value": "casual"},
-                            {"text": {"type": "plain_text", "text": "Sick"}, "value": "sick"},
-                            {"text": {"type": "plain_text", "text": "Unpaid"}, "value": "unpaid"},
-                            {"text": {"type": "plain_text", "text": "Others"}, "value": "others"}
-                        ]
-                    },
-                    "label": {"type": "plain_text", "text": "Leave Type"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "reason",
-                    "element": {"type": "plain_text_input", "action_id": "reason"},
-                    "label": {"type": "plain_text", "text": "Reason"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "start_date",
-                    "element": {"type": "datepicker", "action_id": "start_date"},
-                    "label": {"type": "plain_text", "text": "Start Date"}
-                },
-                {
-                    "type": "input",
-                    "block_id": "end_date",
-                    "element": {"type": "datepicker", "action_id": "end_date"},
-                    "label": {"type": "plain_text", "text": "End Date"}
+    modal_view = {
+        "type": "modal",
+        "callback_id": "leave_application",
+        "title": {"type": "plain_text", "text": "Leave Application"},
+        "submit": {"type": "plain_text", "text": "Submit"},
+        "close": {"type": "plain_text", "text": "Cancel"},
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": "leave_type_block",
+                "label": {"type": "plain_text", "text": "Leave Type"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "leave_type",
+                    "placeholder": {"type": "plain_text", "text": "Select a leave type"},
+                    "options": [
+                        {"text": {"type": "plain_text", "text": "Casual Leave"}, "value": "casual"},
+                        {"text": {"type": "plain_text", "text": "Sick Leave"}, "value": "sick"},
+                        {"text": {"type": "plain_text", "text": "Emergency Leave"}, "value": "emergency"}
+                    ]
                 }
-            ]
-        }
-        slack_client.views_open(trigger_id=trigger_id, view=view)
+            },
+            {
+                "type": "input",
+                "block_id": "start_date_block",
+                "label": {"type": "plain_text", "text": "Start Date"},
+                "element": {"type": "datepicker", "action_id": "start_date"}
+            },
+            {
+                "type": "input",
+                "block_id": "end_date_block",
+                "label": {"type": "plain_text", "text": "End Date"},
+                "element": {"type": "datepicker", "action_id": "end_date"}
+            },
+            {
+                "type": "input",
+                "block_id": "reason_block",
+                "label": {"type": "plain_text", "text": "Reason"},
+                "element": {"type": "plain_text_input", "action_id": "reason", "multiline": True}
+            }
+        ]
+    }
+    try:
+        slack_client.views_open(trigger_id=trigger_id, view=modal_view)
     except SlackApiError as e:
-        logger.error(f"Error opening modal: {e.response['error']}")
+        logger.error(f"Slack API error (views_open): {e.response['error']}")
 
-
-
+def get_slack_user_info(user_id):
+    try:
+        response = slack_client.users_info(user=user_id)
+        return response['user']
+    except SlackApiError as e:
+        logger.error(f"Slack API error (users_info): {e.response['error']}")
+        return {}
