@@ -2,25 +2,26 @@ from django.db import models
 from django.utils import timezone
 
 class LeaveApplication(models.Model):
-    employee_name = models.CharField(max_length=100, default='')
-    employee_id = models.CharField(max_length=100, default='')
-    slack_user_id = models.CharField(max_length=100, default='') 
+    slack_user_id = models.CharField(max_length=100, default='')  # Add default value
+    employee_name = models.CharField(max_length=100, default='')  # Add default value
+    employee_email = models.EmailField(default='unknown@example.com')  # Add default value
+
     employment_type = models.CharField(
-        max_length=20, 
-        choices=[('full_time', 'Full Time'), ('intern', 'Intern')], 
+        max_length=20,
+        choices=[('full_time', 'Full Time'), ('intern', 'Intern')],
         default='full_time'
     )
     start_date = models.DateField(default=timezone.now)
     end_date = models.DateField(default=timezone.now)
     leave_type = models.CharField(
-        max_length=10, 
-        choices=[('full', 'Full Day'), ('half', 'Half Day')], 
+        max_length=10,
+        choices=[('full', 'Full Day'), ('half', 'Half Day')],
         default='full'
     )
     reason = models.TextField(default='')
     status = models.CharField(
-        max_length=10, 
-        choices=[('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')], 
+        max_length=10,
+        choices=[('pending', 'Pending'), ('approved', 'Approved'), ('rejected', 'Rejected')],
         default='pending'
     )
     manager_id = models.CharField(max_length=100, default='')
