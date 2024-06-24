@@ -2,9 +2,9 @@ from django.db import models
 from django.utils import timezone
 
 class LeaveApplication(models.Model):
-    slack_user_id = models.CharField(max_length=100, default='')  # Add default value
-    employee_name = models.CharField(max_length=100, default='')  # Add default value
-    employee_email = models.EmailField(default='unknown@example.com')  # Add default value
+    slack_user_id = models.CharField(max_length=100, default='')  
+    employee_name = models.CharField(max_length=100, default='')  
+    employee_email = models.EmailField(default='') 
 
     employment_type = models.CharField(
         max_length=20,
