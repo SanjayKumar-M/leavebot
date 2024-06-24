@@ -20,19 +20,18 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# Initialize logger
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load Slack credentials from environment variables
-slack_bot_token = ''  # Replace with os.getenv('SLACK_BOT_TOKEN')
-slack_signing_secret = ''  # Replace with os.getenv('SLACK_SIGNING_SECRET')
+slack_bot_token = ''  
+slack_signing_secret = '' 
 
-# SSL context for Slack client
+
 ssl_context = ssl.SSLContext()
 ssl_context.verify_mode = ssl.CERT_NONE
 
-# Initialize Slack client and verifier
+
 slack_client = WebClient(token=slack_bot_token, ssl=ssl_context)
 verifier = SignatureVerifier(signing_secret=slack_signing_secret)
 
@@ -97,10 +96,10 @@ def slack_slash_command(request):
                 text = data.get('text', '').strip()
                 if text == 'download':
                     send_leave_history(user_id, download=True)
-                    return JsonResponse({"response_type": "ephemeral", "text": "Leave history image sent to your DM"})
+                    return JsonResponse({"response_type": "ephemeral", "text": " "})
                 else:
                     send_leave_history(user_id)
-                    return JsonResponse({"response_type": "ephemeral", "text": "Leave history sent to your DM"})
+                    return JsonResponse({"response_type": "ephemeral", "text": " "})
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
             return JsonResponse({'error': 'Invalid JSON'}, status=400)
@@ -162,8 +161,8 @@ def calculate_leave_balance(user_id):
 
         response_text = (
             f"You have used {days_used_this_month} days this month. "
-            f"Remaining days this month: {remaining_days_this_month}. "
-            f"Remaining days this year: {remaining_days_this_year}."
+            f"Remaining Paid leaves this month: {remaining_days_this_month}. "
+            
         )
 
         logger.info(f"Leave balance response: {response_text}")
@@ -208,6 +207,7 @@ def handle_interaction_action(payload):
 
     try:
         leave_application = LeaveApplication.objects.get(id=leave_application_id)
+      
         if action_id == 'approve_leave':
             leave_application.status = 'approved'
             status_message = f"You approved {leave_application.employee_name}'s application."
@@ -222,7 +222,7 @@ def handle_interaction_action(payload):
             text=f"Your leave application from {leave_application.start_date} to {leave_application.end_date} has been {leave_application.status}."
         )
 
-        # Update the original message with the status
+ 
         slack_client.chat_update(
             channel=payload['channel']['id'],
             ts=payload['message']['ts'],
@@ -251,7 +251,7 @@ def handle_submission(payload):
         real_name = user_info.get('real_name', 'Unknown User')
         email = user_info.get('profile', {}).get('email', 'unknown@example.com')
 
-        # Check if the user has reached the leave limit for the month
+     
         if not can_apply_leave(user_id, leave_type, start_date, end_date):
             return JsonResponse({"response_action": "errors", "errors": {"reason_block": "You have reached the leave limit for this month."}})
 
@@ -267,23 +267,23 @@ def handle_submission(payload):
             submitted_at=datetime.now()
         )
         leave_application.save()
-
-        manager_id = 'U076MHB604A'  # replace with the actual manager's Slack ID
+    
+        manager_id = 'U076MHB604A'  
         slack_client.chat_postMessage(
             channel=manager_id,
             text=f"New leave application submitted by {real_name}:\n"
-                 f"Type: {leave_type}\n"
-                 f"Reason: {reason}\n"
-                 f"From: {start_date} To: {end_date}",
+                 f"Type:    {leave_type}\n"
+                 f"Reason:  {reason}\n"
+                 f"From:    {start_date} To: {end_date}",
             blocks=[
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
                         "text": f"*New leave application submitted by {real_name}:*\n"
-                                f"*Type:* {leave_type}\n"
-                                f"*Reason:* {reason}\n"
-                                f"*From:* {start_date} To: {end_date}"
+                                f"*Type:*     {leave_type}\n"
+                                f"*Reason:*   {reason}\n"
+                                f"*From:*     {start_date} To: {end_date}"
                     }
                 },
                 {
@@ -318,7 +318,7 @@ def handle_submission(payload):
         slack_client.chat_postMessage(
             channel=user_id,
             text=f"Your leave application has been submitted:\n\n"
-                 f"Type: {leave_type}\n"
+                 f"Type: {leave_type}\n" #this is 
                  f"Reason: {reason}\n"
                  f"From: {start_date} To: {end_date}\n\n"
                  f"You will be notified once it is reviewed."
@@ -333,10 +333,8 @@ def can_apply_leave(user_id, leave_type, start_date, end_date):
     current_year = timezone.now().year
     current_month = timezone.now().month
 
-    # Define leave limits
     monthly_limit = 2
 
-    # Calculate days used for the given leave type in the current month
     applications = LeaveApplication.objects.filter(
         slack_user_id=user_id,
         status='approved',
@@ -347,7 +345,7 @@ def can_apply_leave(user_id, leave_type, start_date, end_date):
 
     days_used_this_month = sum((app.end_date - app.start_date).days + 1 for app in applications)
 
-    # Calculate the number of days for the new leave application
+  
     new_leave_days = (datetime.strptime(end_date, "%Y-%m-%d") - datetime.strptime(start_date, "%Y-%m-%d")).days + 1
 
     if leave_type in ['sick', 'casual']:
@@ -414,3 +412,9 @@ def get_slack_user_info(user_id):
     except SlackApiError as e:
         logger.error(f"Slack API error (users_info): {e.response['error']}")
         return {}
+    
+
+'''
+
+
+'''
